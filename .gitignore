@@ -1,0 +1,52 @@
+# Environment variables and configuration
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+config.json
+secrets.json
+
+# API keys and credentials
+*credentials*
+*apikey*
+*secret*
+
+# Personal data files
+*.csv
+*.xlsx
+*.xls
+personal_data/
+
+# Log files
+*.log
+logs/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Node.js dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo

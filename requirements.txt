@@ -1,0 +1,4 @@
+requests>=2.25.0
+direct7>=0.0.12
+icalendar>=5.0.0
+pytz>=2023.3
