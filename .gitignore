@@ -11,6 +11,11 @@ secrets.json
 *credentials*
 *apikey*
 *secret*
+quick_twilio_test.py
+update_twilio_config.py
+config.json
+credentials.json
+token.pickle
 
 # Personal data files
 *.csv
