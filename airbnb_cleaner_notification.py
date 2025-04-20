@@ -5,214 +5,203 @@ import os
 import requests
 import sys
 import icalendar
+import argparse
+import logging
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("cleaning_detailed.log"),
+        logging.StreamHandler()
+    ]
+)
 
 # Constants
 PROPERTY_LOCATION = "Austin Bell Unit 310"  # Location the cleaner is familiar with
+DEFAULT_RECEIVER = "+14253012277"  # Updated test number
+
 
 def send_sms(phone_number, message):
-    """Send SMS using D7 SMS API with API token authentication."""
+    """Send SMS using Twilio API with Account SID and Auth Token authentication."""
     # Load configuration
     config = load_config()
     
-    # Get API token
-    api_token = config.get('D7_API_TOKEN')
+    # Get Twilio credentials
+    account_sid = config.get('TWILIO_ACCOUNT_SID')
+    auth_token = config.get('TWILIO_AUTH_TOKEN')
+    twilio_number = config.get('TWILIO_PHONE_NUMBER')
     
-    if not api_token:
-        print("Error: D7 SMS API token not configured in config.json")
+    if not account_sid or not auth_token or not twilio_number:
+        logging.error("Error: Twilio credentials not configured in config.json")
         return False
-    
-    # Prepare the request
-    url = "https://api.d7networks.com/messages/v1/send"
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": f"Bearer {api_token}"
-    }
-    data = {
-        "messages": [
-            {
-                "channel": "sms",
-                "recipients": [phone_number],
-                "content": message,
-                "msg_type": "text",
-                "data_coding": "text"
-            }
-        ],
-        "message_globals": {
-            "originator": "AirbnbClean",
-            "report_url": "https://the_url_to_receive_delivery_report.com"
-        }
-    }
     
     try:
-        # Send the request
-        response = requests.post(url, headers=headers, json=data)
+        # Import Twilio client
+        from twilio.rest import Client
         
-        # Check if the request was successful
-        if response.status_code in [200, 201, 202]:
-            print(f"Successfully sent SMS to {phone_number}")
-            return True
-        else:
-            print(f"Failed to send SMS. Status code: {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
+        # Create Twilio client using Account SID and Auth Token authentication
+        client = Client(account_sid, auth_token)
+        
+        # Send message
+        logging.info(f"Sending SMS to {phone_number} via Twilio")
+        message_obj = client.messages.create(
+            body=message,
+            from_=twilio_number,
+            to=phone_number
+        )
+        
+        logging.info(f"Successfully sent SMS to {phone_number}")
+        logging.info(f"Message SID: {message_obj.sid}, Status: {message_obj.status}")
+        return True
+    except ImportError:
+        logging.error("Twilio library not installed. Installing now...")
+        os.system("pip install twilio")
+        return send_sms(phone_number, message)  # Retry after installation
     except Exception as e:
-        print(f"Error sending SMS: {e}")
+        logging.error(f"Error sending SMS: {e}")
         return False
+
 
 def load_config():
     """Load configuration from config.json file."""
-    # Get the directory of the script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, 'config.json')
-    
-    # Create default config if it doesn't exist
-    if not os.path.exists(config_path):
-        default_config = {
-            "D7_API_TOKEN": "",
-            "CLEANER_PHONE": "",
-            "ICAL_URL": "",
-            "PROPERTY_LOCATION": "Austin Bell Unit 310"
-        }
-        with open(config_path, 'w') as f:
-            json.dump(default_config, f, indent=4)
-        print(f"Created default config file at {config_path}. Please update with your credentials.")
-    
-    # Load config
     try:
-        with open(config_path, 'r') as f:
-            return json.load(f)
+        with open('config.json', 'r') as f:
+            config = json.load(f)
+            # Mask sensitive information in logs
+            masked_config = {k: '***' if k in ['D7_API_TOKEN', 'TWILIO_AUTH_TOKEN'] else v for k, v in config.items()}
+            logging.info(f"Loaded configuration: {json.dumps(masked_config)}")
+            return config
     except Exception as e:
-        print(f"Error loading config: {e}")
+        logging.error(f"Error loading config: {e}")
         return {}
 
-def check_checkout_tomorrow():
+
+def check_checkout_tomorrow(dry_run=False):
     """Checks for events ending tomorrow and notifies cleaner.
     
     Assumptions:
     - In Airbnb's iCal format, DTEND is the date the guest checks out
     - DTSTART is the date the guest checks in
     - We directly use these dates without additional processing
-    """
-    # Parse command line arguments
-    import argparse
-    parser = argparse.ArgumentParser(description='Check for Airbnb checkouts tomorrow')
-    parser.add_argument('--dry-run', action='store_true', help='Do not send SMS, just print what would be sent')
-    args, unknown = parser.parse_known_args()
     
+    Args:
+        dry_run: If True, don't actually send SMS, just print what would be sent
+    """
     # Load configuration
     config = load_config()
     
-    # Check if cleaner's phone is configured
-    cleaner_phone = config.get('CLEANER_PHONE')
+    # Get cleaner's phone number (use default if not configured)
+    cleaner_phone = config.get('CLEANER_PHONE', DEFAULT_RECEIVER)
+    
     if not cleaner_phone:
-        print("Error: Cleaner's phone number not configured in config.json")
+        logging.error("Error: Cleaner's phone number not configured in config.json")
         return
     
-    # Get today's date and tomorrow's date
-    today = datetime.datetime.now().date()
-    tomorrow = today + datetime.timedelta(days=1)
-    
-    print(f"Checking for events ending tomorrow ({tomorrow.isoformat()})")
-    
-    # Get iCal URL from config
+    # Get iCal URL
     ical_url = config.get('ICAL_URL')
     
-    # Check if the iCal URL is valid
-    if not ical_url or not (ical_url.startswith('http://') or ical_url.startswith('https://')):
-        print("Error: iCal URL is not valid")
-        print("Please update your config.json with a valid Airbnb iCal URL")
+    if not ical_url:
+        logging.error("Error: iCal URL not configured in config.json")
         return
-        
+    
+    # Get property location
+    property_location = config.get('PROPERTY_LOCATION', PROPERTY_LOCATION)
+    
+    # Get tomorrow's date
+    tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+    logging.info(f"Checking for events ending tomorrow ({tomorrow})")
+    
     try:
-        # Download the iCal file
-        print(f"Downloading iCal data from: {ical_url}")
-        response = requests.get(ical_url, verify=False)
-        ical_data = response.content
+        # Download iCal data
+        logging.info(f"Downloading iCal data from: {ical_url}")
+        response = requests.get(ical_url, verify=False)  # Note: verify=False is not recommended for production
         
-        # Parse the iCal data
-        calendar = icalendar.Calendar.from_ical(ical_data)
+        if response.status_code != 200:
+            logging.error(f"Failed to download iCal data. Status code: {response.status_code}")
+            return
         
-        # Process all events
-        checkout_events = []
-        all_events = []
+        # Parse iCal data
+        cal = icalendar.Calendar.from_ical(response.text)
         
-        # First collect all events
-        for component in calendar.walk():
+        # Check for events ending tomorrow
+        found_event = False
+        next_checkin_date = None
+        
+        # First, find the next check-in after tomorrow
+        for component in cal.walk():
             if component.name == "VEVENT":
-                summary = str(component.get('SUMMARY', 'No Title'))
-                start_date = component.get('DTSTART').dt
-                end_date = component.get('DTEND').dt
-                
-                # Convert to date if datetime
+                start_date = component.get('dtstart').dt
                 if isinstance(start_date, datetime.datetime):
                     start_date = start_date.date()
+                
+                if start_date > tomorrow and (next_checkin_date is None or start_date < next_checkin_date):
+                    next_checkin_date = start_date
+        
+        # Now check for events ending tomorrow
+        for component in cal.walk():
+            if component.name == "VEVENT":
+                end_date = component.get('dtend').dt
                 if isinstance(end_date, datetime.datetime):
                     end_date = end_date.date()
                 
-                # Store event info
-                event_info = {
-                    'summary': summary,
-                    'start': start_date,
-                    'end': end_date
-                }
-                all_events.append(event_info)
-                
-                # Check if this event ends tomorrow (checkout)
-                if end_date == tomorrow and 'reserved' in summary.lower():
-                    checkout_events.append(event_info)
-                    print(f"Found event ending tomorrow: {summary}, End date: {end_date}")
-        
-        # If we found events ending tomorrow, send notification
-        if checkout_events:
-            # Look for upcoming events starting in the next 3 days
-            next_checkin = None
-            three_days_later = tomorrow + datetime.timedelta(days=3)
-            
-            for event in all_events:
-                # Only consider 'Reserved' events
-                if 'reserved' not in event['summary'].lower():
-                    continue
-                
-                # Check if this is a future check-in within the next 3 days
-                if (event['start'] >= tomorrow and 
-                    event['start'] <= three_days_later):
+                if end_date == tomorrow:
+                    found_event = True
+                    summary = component.get('summary')
+                    logging.info(f"Found event ending tomorrow: {summary}, End date: {end_date}")
                     
-                    # If we haven't found a check-in yet, or this one is earlier
-                    if next_checkin is None or event['start'] < next_checkin['start']:
-                        next_checkin = event
-            
-            # Prepare the message
-            message = f"Cleaning needed tomorrow ({tomorrow.strftime('%A, %B %d, %Y')}) at {PROPERTY_LOCATION}."
-            
-            # Add next check-in information if found
-            if next_checkin:
-                days_until = (next_checkin['start'] - tomorrow).days
-                
-                if days_until == 1:
-                    message += f" Next check-in is the day after tomorrow ({next_checkin['start'].strftime('%A, %B %d')})."
-                else:
-                    message += f" Next check-in is on {next_checkin['start'].strftime('%A, %B %d')}."
-            else:
-                message += " No upcoming check-ins in the next 3 days."
-            
-            # Send the message
-            if not args.dry_run:
-                if send_sms(cleaner_phone, message):
-                    print(f"Successfully sent SMS notification: {message}")
-                else:
-                    print("Failed to send SMS notification")
-            else:
-                print(f"[DRY RUN] Would send SMS: {message}")
-        else:
-            print(f"No events ending tomorrow ({tomorrow.isoformat()}) at {PROPERTY_LOCATION}")
-            
+                    # Format the message
+                    tomorrow_day = tomorrow.strftime("%A, %B %d, %Y")
+                    
+                    message = f"Cleaning needed tomorrow ({tomorrow_day}) at {property_location}."
+                    
+                    if next_checkin_date:
+                        days_until_checkin = (next_checkin_date - tomorrow).days
+                        next_checkin_day = next_checkin_date.strftime("%A, %B %d")
+                        
+                        if days_until_checkin == 1:
+                            message += f" Next check-in is the day after tomorrow ({next_checkin_day})."
+                        else:
+                            message += f" Next check-in is in {days_until_checkin} days ({next_checkin_day})."
+                    
+                    if dry_run:
+                        logging.info(f"[DRY RUN] Would send SMS: {message}")
+                    else:
+                        # Send SMS
+                        send_sms(cleaner_phone, message)
+        
+        if not found_event:
+            logging.info("No events ending tomorrow.")
+    
     except Exception as e:
-        print(f"Error checking calendar: {e}")
+        logging.error(f"Error checking for events: {e}")
+
 
 def main():
     """Main function to run the script."""
-    check_checkout_tomorrow()
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Airbnb Cleaner Notification')
+    parser.add_argument('--dry-run', action='store_true', help='Do not send SMS, just print what would be sent')
+    parser.add_argument('--test-sms', action='store_true', help='Send a test SMS to the cleaner')
+    args = parser.parse_args()
+    
+    if args.test_sms:
+        # Get cleaner's phone number
+        config = load_config()
+        cleaner_phone = config.get('CLEANER_PHONE', DEFAULT_RECEIVER)
+        
+        if not cleaner_phone:
+            logging.error("Error: Cleaner's phone number not configured in config.json")
+            return
+        
+        logging.info(f"Sending test SMS to {cleaner_phone}")
+        send_sms(cleaner_phone, "This is a test message from the Airbnb cleaning reminder system.")
+        logging.info("Test SMS sent successfully")
+    else:
+        # Check for events ending tomorrow
+        check_checkout_tomorrow(dry_run=args.dry_run)
+
 
 if __name__ == "__main__":
     main()
